@@ -18,7 +18,7 @@ env:
   WEAVIATE_124: 1.24.21
   WEAVIATE_125: 1.25.8
   WEAVIATE_126: preview-increase-version-number-8b44fe6
-
+  WEAVIATE_127: preview-feat-list-backups-in-progress-endpoint-904629e
 
 jobs:
   lint-and-format:
@@ -128,7 +128,7 @@ jobs:
           { py: "3.11", weaviate: $WEAVIATE_124},
           { py: "3.11", weaviate: $WEAVIATE_125},
           { py: "3.11", weaviate: $WEAVIATE_126},
-          { py: "3.12", weaviate: $WEAVIATE_126}
+          { py: "3.12", weaviate: $WEAVIATE_127}
         ]
         optional_dependencies: [false]
     steps:
