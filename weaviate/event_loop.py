@@ -3,11 +3,20 @@ import threading
 import time
 from concurrent.futures import Future
 from typing import Any, Callable, Coroutine, Dict, Generic, Optional, TypeVar, cast
-
 from typing_extensions import ParamSpec
 
-from weaviate.exceptions import WeaviateClosedClientError
 
+class EventLoopClosedError(RuntimeError):
+    """Raise an exception if the event loop is closed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The event loop is closed. This may have been caused by trying to use an async function "
+            "after the event loop was terminated. Ensure that the event loop is running before making async calls."
+        )
+
+
+# Define type variables for use in function signatures
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -19,36 +28,52 @@ class _Future(Future, Generic[T]):
 
 class _EventLoop:
     def __init__(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
-        self.loop = loop
+        self.loop: Optional[asyncio.AbstractEventLoop] = loop
 
     def start(self) -> None:
         if self.loop is not None:
             return
         self.loop = self.__start_new_event_loop()
 
+    def _ensure_event_loop_is_running(self) -> asyncio.AbstractEventLoop:
+        """Helper function to ensure the event loop is not None and running."""
+        if self.loop is None or self.loop.is_closed():
+            raise EventLoopClosedError()
+        return self.loop
+
     def run_until_complete(
         self, f: Callable[P, Coroutine[Any, Any, T]], *args: P.args, **kwargs: P.kwargs
     ) -> T:
-        """This method runs the provided coroutine in a blocking manner by scheduling its execution
-        in an event loop running in a parallel thread.
+        """Runs the provided coroutine in a blocking manner."""
+        loop = self._ensure_event_loop_is_running()  # Ensure loop is not None and running
 
-        The result of the coroutine is returned, either when the coroutine completes or raises an exception.
-        """
-        if self.loop is None or self.loop.is_closed():
-            raise WeaviateClosedClientError()
-        fut = asyncio.run_coroutine_threadsafe(f(*args, **kwargs), self.loop)
-        return fut.result()
+        try:
+            fut = asyncio.run_coroutine_threadsafe(f(*args, **kwargs), loop)
+            return fut.result()
+        except RuntimeError as e:
+            # Re-raise with a more descriptive message if the event loop is closed
+            if "Event loop is closed" in str(e):
+                raise EventLoopClosedError() from e
+            raise RuntimeError(
+                f"Failed to run coroutine '{f.__name__}' due to an unexpected error: {str(e)}"
+            ) from e  # Provide context on other runtime errors
 
     def schedule(
         self, f: Callable[P, Coroutine[Any, Any, T]], *args: P.args, **kwargs: P.kwargs
     ) -> _Future[T]:
-        """This method schedules the provided coroutine for execution in the event loop running in a parallel thread.
+        """Schedules the provided coroutine for asynchronous execution."""
+        loop = self._ensure_event_loop_is_running()  # Ensure loop is not None and running
 
-        The coroutine will be executed asynchronously in the background.
-        """
-        if self.loop is None or self.loop.is_closed():
-            raise WeaviateClosedClientError()
-        return cast(_Future[T], asyncio.run_coroutine_threadsafe(f(*args, **kwargs), self.loop))
+        try:
+            fut = asyncio.run_coroutine_threadsafe(f(*args, **kwargs), loop)
+            return cast(_Future[T], fut)  # Ensure we return a valid _Future instance
+        except RuntimeError as e:
+            # Re-raise with a more descriptive message if the event loop is closed
+            if "Event loop is closed" in str(e):
+                raise EventLoopClosedError() from e
+            raise RuntimeError(
+                f"Failed to schedule coroutine '{f.__name__}' due to an unexpected error: {str(e)}"
+            ) from e  # Provide context on other runtime errors
 
     def shutdown(self) -> None:
         if self.loop is None:
